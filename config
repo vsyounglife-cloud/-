@@ -1,0 +1,86 @@
+# -*- coding: utf-8 -*-
+"""
+Конфигурация платформы: компетенции, шкалы, правила статусов и вердиктов.
+Всё настраивается здесь — без правки кода pipeline.
+"""
+
+# --- Компетенции (двуязычные названия, как в референсном отчёте) ---
+COMPETENCIES = {
+    "pnl": {
+        "name_ru": "Финансовый результат (P&L) ДМ",
+        "name_kz": "Қаржылық нәтиже (P&L) ДД",
+    },
+    "analytics": {
+        "name_ru": "Анализ и финансовое мышление ДМ",
+        "name_kz": "ДД-ның талдауы мен қаржылық ойлауы",
+    },
+    "commercial": {
+        "name_ru": "Коммерческое исполнение ДМ",
+        "name_kz": "ДД-ның коммерциялық орындаушылығы",
+    },
+    "management_thinking": {
+        "name_ru": "Управленческое мышление ДМ",
+        "name_kz": "ДД-ның басқарушылық ойлауы",
+    },
+    "team": {
+        "name_ru": "Управление командой ДМ",
+        "name_kz": "ДД-ның команданы басқаруы",
+    },
+    "operations": {
+        "name_ru": "Операционное управление ДМ",
+        "name_kz": "ДД-ның операциялық басқаруы",
+    },
+}
+
+# --- Правила присвоения СТАТУСА по баллу компетенции (шкала /5) ---
+# Проверяются сверху вниз, берётся первый подходящий диапазон.
+STATUS_RULES = [
+    {"min": 4.5, "label": "Стратегический интеллект"},
+    {"min": 4.0, "label": "Бизнес-ориентированность"},
+    {"min": 3.5, "label": "Зона роста"},
+    {"min": 0.0, "label": "Зона развития"},
+]
+
+# --- Правила общего ВЕРДИКТА по итоговому проценту ---
+VERDICT_RULES = [
+    {"min": 85, "title": "ВЫДАЮЩИЙСЯ ДИРЕКТОР"},
+    {"min": 75, "title": "ЭФФЕКТИВНЫЙ ДИРЕКТОР"},
+    {"min": 60, "title": "РАЗВИВАЮЩИЙСЯ ДИРЕКТОР"},
+    {"min": 0,  "title": "ТРЕБУЕТ РАЗВИТИЯ"},
+]
+
+# --- Конвертация % верных ответов в шкалу /5 (линейно) ---
+def percent_to_scale5(percent: float) -> float:
+    """0% -> 1.0 балл, 100% -> 5.0 балла (линейно), округление до 0.1."""
+    score = 1.0 + (percent / 100.0) * 4.0
+    return round(min(5.0, max(1.0, score)), 1)
+
+
+def status_for_score(score5: float) -> str:
+    for rule in STATUS_RULES:
+        if score5 >= rule["min"]:
+            return rule["label"]
+    return STATUS_RULES[-1]["label"]
+
+
+def verdict_for_percent(percent: float) -> str:
+    for rule in VERDICT_RULES:
+        if percent >= rule["min"]:
+            return rule["title"]
+    return VERDICT_RULES[-1]["title"]
+
+
+# --- Настройки AI-провайдера ---
+# provider: "mock" (без сети, для теста) | "ollama" (локально, бесплатно) | "gemini" (облако, free tier)
+AI_CONFIG = {
+    "provider": "mock",
+    "ollama": {
+        "url": "http://localhost:11434/api/generate",
+        "model": "qwen2.5:7b",
+    },
+    "gemini": {
+        "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent",
+        "api_key_env": "GEMINI_API_KEY",  # ключ берётся из переменной окружения
+    },
+    "temperature": 0.0,  # для стабильности оценок
+}
