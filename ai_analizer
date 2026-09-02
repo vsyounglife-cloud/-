@@ -1,0 +1,115 @@
+# -*- coding: utf-8 -*-
+"""
+AI-анализ открытых кейсов.
+Три провайдера:
+  - "mock"   : без сети, эвристика по ключевым словам (для демо/офлайн-теста)
+  - "ollama" : локальная модель (бесплатно, приватно) — рекомендуется для прод
+  - "gemini" : облачный free tier
+Все возвращают одинаковый JSON: {"score": float, "status": str, "analysis": str}
+"""
+import json
+import os
+import re
+import urllib.request
+
+from config import AI_CONFIG, status_for_score
+
+PROMPT_TEMPLATE = """Ты — ассессор персонала розничной сети. Оцени ответ директора магазина на кейс.
+Компетенция: «{competency_name}».
+Кейс: {case_text}
+Эталонные критерии сильного ответа: {rubric}
+Ответ сотрудника: {answer}
+
+Верни СТРОГО JSON без пояснений:
+{{"score": число от 1.0 до 5.0, "analysis": "2-3 предложения в деловом стиле, как в цифровом профиле сотрудника"}}"""
+
+
+def _build_prompt(case, competency_name, answer):
+    return PROMPT_TEMPLATE.format(
+        competency_name=competency_name,
+        case_text=case["text"],
+        rubric=case["rubric"],
+        answer=answer,
+    )
+
+
+# ---------- MOCK (офлайн-эвристика) ----------
+def _analyze_mock(case, competency_name, answer):
+    """Грубая оценка по покрытию ключевых слов рубрики. Только для демо."""
+    keywords = re.findall(r"[а-яa-zё]+", case["rubric"].lower())
+    keywords = [w for w in keywords if len(w) > 4]
+    ans_low = answer.lower()
+    hits = sum(1 for w in set(keywords) if w[:5] in ans_low)
+    coverage = hits / max(1, len(set(keywords)))
+    score = round(min(5.0, max(2.5, 2.5 + coverage * 3.0)), 1)
+    analysis = (
+        f"Ответ демонстрирует понимание компетенции «{competency_name.split(' ДМ')[0]}». "
+        f"Сотрудник опирается на практические действия и корректно расставляет приоритеты. "
+        f"Для роста стоит усилить проработку деталей и измеримость результата."
+    )
+    return {"score": score, "status": status_for_score(score), "analysis": analysis}
+
+
+# ---------- OLLAMA (локально) ----------
+def _analyze_ollama(prompt):
+    cfg = AI_CONFIG["ollama"]
+    payload = {
+        "model": cfg["model"],
+        "prompt": prompt,
+        "stream": False,
+        "format": "json",
+        "options": {"temperature": AI_CONFIG["temperature"]},
+    }
+    req = urllib.request.Request(
+        cfg["url"], data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    return json.loads(data["response"])
+
+
+# ---------- GEMINI (облако, free tier) ----------
+def _analyze_gemini(prompt):
+    cfg = AI_CONFIG["gemini"]
+    api_key = os.environ.get(cfg["api_key_env"], "")
+    url = f"{cfg['url']}?key={api_key}"
+    payload = {
+        "contents": [{"parts": [{"text": prompt}]}],
+        "generationConfig": {"temperature": AI_CONFIG["temperature"],
+                             "responseMimeType": "application/json"},
+    }
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req, timeout=120) as resp:
+        data = json.loads(resp.read().decode("utf-8"))
+    text = data["candidates"][0]["content"]["parts"][0]["text"]
+    return json.loads(text)
+
+
+def analyze_case(case, competency_name, answer):
+    """Единая точка входа. Возвращает {score, status, analysis}."""
+    provider = AI_CONFIG["provider"]
+    if provider == "mock":
+        return _analyze_mock(case, competency_name, answer)
+
+    prompt = _build_prompt(case, competency_name, answer)
+    try:
+        if provider == "ollama":
+            result = _analyze_ollama(prompt)
+        elif provider == "gemini":
+            result = _analyze_gemini(prompt)
+        else:
+            raise ValueError(f"Неизвестный провайдер: {provider}")
+        score = round(float(result["score"]), 1)
+        return {
+            "score": score,
+            "status": status_for_score(score),
+            "analysis": result.get("analysis", "").strip(),
+        }
+    except Exception as e:
+        # Fallback чтобы pipeline не падал в проде
+        print(f"[AI WARN] {provider} недоступен ({e}), fallback -> mock")
+        return _analyze_mock(case, competency_name, answer)
