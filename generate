@@ -1,0 +1,15 @@
+# -*- coding: utf-8 -*-
+"""HTML-шаблон + данные -> PDF (через WeasyPrint, бесплатно)."""
+import os
+from jinja2 import Environment, FileSystemLoader
+from weasyprint import HTML
+
+TEMPLATES_DIR = os.path.join(os.path.dirname(__file__), "..", "templates")
+
+
+def render_pdf(profile: dict, output_path: str):
+    env = Environment(loader=FileSystemLoader(TEMPLATES_DIR))
+    template = env.get_template("report_template.html")
+    html_str = template.render(**profile)
+    HTML(string=html_str).write_pdf(output_path)
+    return output_path
